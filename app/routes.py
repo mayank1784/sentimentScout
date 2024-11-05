@@ -214,6 +214,7 @@ def get_reviews(product_id):
             "relevance_score": <float>        # The relevance score assigned to the review
         },
         ...
+        
     ]
     """
     # Fetch all reviews for the specified product ID
