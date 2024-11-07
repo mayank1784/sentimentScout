@@ -1,8 +1,11 @@
 from flask import jsonify, request, abort
 from app import app,db, login_manager, bcrypt
-from app.models import User, Product, ProductPlatform, Review, SentimentSummary, Notification, ReviewSource
+from app.models import User, Product, ProductPlatform, Review, SentimentSummary, Notification, ReviewSource, ScrapingTask, RawReview
 from flask_login import login_user, logout_user, login_required, current_user
-from errorHandler import handle_errors
+from app.errorHandler import handle_errors
+from app.tasks import scrape_flipkart_reviews, scrape_amazon_reviews
+import threading
+import uuid
 
 # User loader for Flask-Login
 @login_manager.user_loader
@@ -328,3 +331,40 @@ def generic_dashboard():
             })
             
     return jsonify({'products': product_summaries}), 200
+
+@app.route('/scrape_flipkart_reviews/<string:fsn>', methods=['POST'])
+def scrape_flipkart_reviews_route(fsn):
+    if not fsn:
+        return jsonify({'error': 'FSN is required'}), 400
+
+    task_id = str(uuid.uuid4())
+    task_thread = threading.Thread(target=scrape_flipkart_reviews, args=(fsn,task_id))
+    task_thread.start()
+    return jsonify({"task_id": task_id, "message": "Scraping started"}), 202
+
+@app.route('/scrape_amazon_reviews/<string:asin>', methods=['POST'])
+def scrape_amazon_reviews_route(asin):
+    if not asin:
+        return jsonify({'error': 'ASIN is required'}), 400
+    task_id = str(uuid.uuid4())
+    task_thread = threading.Thread(target=scrape_amazon_reviews, args=(asin,task_id))
+    task_thread.start()
+    return jsonify({"task_id": task_id, "message": "Scraping started"}), 202
+
+@app.route('/scraping_task_status/<string:task_id>', methods=['GET'])
+def check_task_status(task_id):
+    task = ScrapingTask.query.get(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+
+    reviews = RawReview.query.filter_by(task_id=task_id).all()
+    reviews_data = [{"title": review.title, "rating": review.rating, "body": review.body} for review in reviews]
+    
+    return jsonify({
+        "task_id": task.id,
+        "status": task.status.value,
+        "message": task.message,
+        "reviews": reviews_data
+    })
+
+

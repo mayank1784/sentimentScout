@@ -19,6 +19,11 @@ class Sentiment(enum.Enum):
     POSITIVE='positive'
     NEGATIVE='negative'
     NEUTRAL='neutral'
+    
+class Status(enum.Enum):
+    PENDING='pending'
+    FAILED='failed'
+    COMPLETED='completed'
 
 # User model
 class User(db.Model, UserMixin):
@@ -94,6 +99,7 @@ class SentimentSummary(db.Model):
     word_cloud = db.Column(db.Text)
     
     
+    
     # Helper method to get reviews by sentiment
     def get_reviews_by_sentiment(self, sentiment_value):
         return Review.query.filter_by(product_id=self.product_id, sentiment=sentiment_value).all()
@@ -108,6 +114,27 @@ class Notification(db.Model):
     content = db.Column(db.String(255), nullable=False)
     is_read = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.now(), index=True)
+    
+class ScrapingTask(db.Model):
+    __tablename__='scraping_tasks'
+    id = db.Column(db.String(36), primary_key=True)
+    fsn_asin = db.Column(db.String(50), nullable=False)
+    platform = db.Column(Enum(ReviewSource), nullable=False)  # "flipkart" or "amazon"
+    status = db.Column(Enum(Status), nullable=False, default=Status.PENDING)  # "pending", "completed", "failed"
+    created_at = db.Column(db.DateTime, default=datetime.now())
+    message = db.Column(db.String(200), nullable=True)
+    
+class RawReview(db.Model):
+    __tablename__='raw_reviews'
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.String(36), db.ForeignKey('scraping_tasks.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=True)
+    rating = db.Column(db.String(10), nullable=True)
+    body = db.Column(db.Text, nullable=True)
+    author = db.Column(db.String(100), nullable=True)
+    date = db.Column(db.String(50), nullable=True)
+    platform = db.Column(Enum(ReviewSource), nullable=False)  
+    
     
     
     # # DashboardData model for product and generic dashboard data
