@@ -1,5 +1,3 @@
-from flask import Flask
-from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from app import db
 import enum
@@ -34,7 +32,10 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String(120), unique=True, nullable=False)
     role = db.Column(Enum(Role), default=Role.USER)
     created_at = db.Column(db.DateTime, default=datetime.now(), index=True)
-    notifications = db.relationship('Notification', backref='user', lazy=True)
+     # Product relationship: One user can have many products
+    products = db.relationship('Product', backref='owner', lazy=True)
+    #relationship for ScrapingTasks
+    scraping_tasks = db.relationship('ScrapingTask', backref='created_by_user', lazy=True)
     # Flask-Login required properties
     @property
     def is_authenticated(self):
@@ -62,11 +63,12 @@ class Product(db.Model):
     name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now(), index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
     reviews = db.relationship('Review', backref='product', lazy=True)
     sentiment_summary = db.relationship('SentimentSummary', backref='product', uselist=False)
-    platforms = db.relationship('ProductPlatform', backref='product', lazy=True)
-    # dashboard_data = db.relationship('DashboardData', backref='product', lazy=True)
+    platforms = db.relationship('ProductPlatform', back_populates='product', lazy=True)  # Updated to back_populates for bidirectional relationship
+
     
 # ProductPlatform to associate a product with one or more platforms
 class ProductPlatform(db.Model):
@@ -75,28 +77,36 @@ class ProductPlatform(db.Model):
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
     platform = db.Column(Enum(ReviewSource), nullable=False)
     platform_id = db.Column(db.String(16), unique=True, nullable=False)  # ASIN or FSN
-
-
+    
+    # Define the relationship to Product with back_populates
+    product = db.relationship('Product', back_populates='platforms')
 # Review model
 class Review(db.Model):
     __tablename__ = 'reviews'
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+
     review_text = db.Column(db.Text, nullable=False)
+    rating = db.Column(db.Float)
     source = db.Column(Enum(ReviewSource), nullable=False)
     sentiment = db.Column(Enum(Sentiment))
     relevance_score = db.Column(db.Float)
-    fetched_at = db.Column(db.DateTime, default=datetime.now(), index=True)
+    review_date = db.Column(db.String(50), nullable=True)
+    author = db.Column(db.String(100), nullable=True)
 
 # SentimentSummary model
 class SentimentSummary(db.Model):
     __tablename__ = 'sentiment_summaries'
     id = db.Column(db.Integer, primary_key=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False, unique=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    platform_id = db.Column(db.String(16), db.ForeignKey('product_platforms.platform_id'), nullable=False)
+    platform = db.Column(Enum(ReviewSource), nullable=False)
     positive_count = db.Column(db.Integer, default=0)
     neutral_count = db.Column(db.Integer, default=0)
     negative_count = db.Column(db.Integer, default=0)
     word_cloud = db.Column(db.Text)
+    words = db.Column(db.JSON, nullable=False, default=list)
+    frequency = db.Column(db.JSON, nullable=False, default=list)
     
     
     
@@ -106,23 +116,17 @@ class SentimentSummary(db.Model):
 
 
 
-# Notification model for asynchronous notifications
-class Notification(db.Model):
-    __tablename__ = 'notifications'
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    content = db.Column(db.String(255), nullable=False)
-    is_read = db.Column(db.Boolean, default=False)
-    timestamp = db.Column(db.DateTime, default=datetime.now(), index=True)
-    
 class ScrapingTask(db.Model):
     __tablename__='scraping_tasks'
     id = db.Column(db.String(36), primary_key=True)
     fsn_asin = db.Column(db.String(50), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
     platform = db.Column(Enum(ReviewSource), nullable=False)  # "flipkart" or "amazon"
     status = db.Column(Enum(Status), nullable=False, default=Status.PENDING)  # "pending", "completed", "failed"
     created_at = db.Column(db.DateTime, default=datetime.now())
     message = db.Column(db.String(200), nullable=True)
+    
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
 class RawReview(db.Model):
     __tablename__='raw_reviews'
@@ -133,33 +137,7 @@ class RawReview(db.Model):
     body = db.Column(db.Text, nullable=True)
     author = db.Column(db.String(100), nullable=True)
     date = db.Column(db.String(50), nullable=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
     platform = db.Column(Enum(ReviewSource), nullable=False)  
     
     
-    
-    # # DashboardData model for product and generic dashboard data
-# class DashboardData(db.Model):
-#     __tablename__ = 'dashboard_data'
-#     id = db.Column(db.Integer, primary_key=True)
-#     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-#     timestamp = db.Column(db.DateTime, default=datetime.now(), index=True)
-#     avg_sentiment = db.Column(db.Float)
-#     review_count = db.Column(db.Integer)
-#     positive_ratio = db.Column(db.Float)
-#     top_keywords = db.Column(db.String(255))  # Keywords for word cloud representation
-
-
-# class DashboardData(db.Model):
-#     __tablename__ = 'dashboard_data'
-#     id = db.Column(db.Integer, primary_key=True)
-#     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-#     timestamp = db.Column(db.DateTime, default=datetime.now())
-#     avg_sentiment = db.Column(db.Float)
-#     review_count = db.Column(db.Integer)
-#     positive_ratio = db.Column(db.Float)
-#     top_keywords = db.Column(db.String(255))  # Product-specific keywords for word cloud
-    
-#     # Fields to support aggregation for overall dashboard
-#     global_positive_count = db.Column(db.Integer)
-#     global_neutral_count = db.Column(db.Integer)
-#     global_negative_count = db.Column(db.Integer)

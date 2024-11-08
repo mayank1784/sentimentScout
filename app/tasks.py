@@ -14,6 +14,24 @@ import json
 from app import app,db
 from app.models import ScrapingTask, RawReview, Status, ReviewSource
 
+import pandas as pd
+import pickle
+import re
+import nltk
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('wordnet')
+from nltk.corpus import stopwords
+from nltk import word_tokenize
+from nltk.stem import WordNetLemmatizer
+import plotly.graph_objs as go
+from wordcloud import WordCloud
+from io import BytesIO
+import base64
+import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import CountVectorizer
+
+
 # Function to remove the 'page' parameter and add a new one
 def update_url_with_page_parameter(url, page_value):
     # Parse the current URL
@@ -60,8 +78,13 @@ def extract_reviews_from_page(page_source):
         return found_element.text.strip() if found_element else default
     
     for review in reviews:
+        title = get_text_or_default(review, 'a', {'data-hook': 'review-title'})
+        pattern = r"^\d+(\.\d+)?\s*out of \d+\s*stars\s*"
+        # Use re.sub to remove the matching pattern
+        cleaned_title = re.sub(pattern, "", title)
+        title = cleaned_title.strip()
         extracted_reviews.append({
-            'title': get_text_or_default(review, 'a', {'data-hook': 'review-title'}),
+            'title': title,
             'rating': get_text_or_default(review, 'i', {'data-hook': 'review-star-rating'}),
             'body': get_text_or_default(review, 'span', {'data-hook': 'review-body'}),
             'author': get_text_or_default(review, 'span', {'class': 'a-profile-name'}),
@@ -71,10 +94,11 @@ def extract_reviews_from_page(page_source):
     return extracted_reviews
 
 
-def scrape_flipkart_reviews(fsn, task_id):
+def scrape_flipkart_reviews(fsn, task_id, product_id, **kwargs):
     with app.app_context():
         print('starting reviews fetch')
-        task = ScrapingTask(id=task_id, fsn_asin=fsn, platform=ReviewSource.FLIPKART, status=Status.PENDING)
+        created_by = kwargs.get('created_by')
+        task = ScrapingTask(id=task_id, fsn_asin=fsn, platform=ReviewSource.FLIPKART, status=Status.PENDING, created_by=created_by, product_id = product_id)
         db.session.add(task)
         db.session.commit()
         chrome_options = Options()
@@ -178,17 +202,19 @@ def scrape_flipkart_reviews(fsn, task_id):
                 body=review.get('review'),
                 author=review.get('buyer'),
                 date=review.get('date'),
-                platform=ReviewSource.FLIPKART
+                platform=ReviewSource.FLIPKART,
+                product_id=product_id
             )
             db.session.add(new_review)
         task.status = Status.COMPLETED
         db.session.commit()
         return json.dumps({"success": True, "message": "Scraping completed successfully.",'reviews': review_list})  # Return scraped reviews
 
-def scrape_amazon_reviews(asin, task_id):
+def scrape_amazon_reviews(asin, task_id, product_id, **kwargs):
     with app.app_context():
+        created_by = kwargs.get('created_by')
         print('started amazon reviews fetch')
-        task = ScrapingTask(id=task_id, fsn_asin=asin, platform=ReviewSource.AMAZON, status=Status.PENDING)
+        task = ScrapingTask(id=task_id, fsn_asin=asin, platform=ReviewSource.AMAZON, status=Status.PENDING, created_by=created_by, product_id=product_id)
         db.session.add(task)
         db.session.commit()
         max_pages = 100
@@ -282,9 +308,92 @@ def scrape_amazon_reviews(asin, task_id):
                 body=review.get('body'),
                 author=review.get('author'),
                 date=review.get('date'),
-                platform=ReviewSource.AMAZON
+                platform=ReviewSource.AMAZON,
+                product_id = product_id
             )
             db.session.add(new_review)
         task.status = Status.COMPLETED
         db.session.commit()
         return json.dumps({"success": True, "message": "Scraping completed successfully.", "reviews": all_reviews})
+    
+    
+    
+
+def preprocess_text(text):
+    # Make text lowercase and remove links, text in square brackets, punctuation, and words containing numbers
+    text = str(text)
+    text = text.lower()
+    text = re.sub(r'https?://\S+|www\.\S+|\[.*?\]|[^a-zA-Z\s]+|\w*\d\w*', ' ', text)
+    text = re.sub(r'\n', ' ', text)
+    pattern = r"^\d+(\.\d+)?\s*out of \d+\s*stars\s*"
+    # Use re.sub to remove the matching pattern
+    cleaned_text = re.sub(pattern, "", text)
+    text = cleaned_text.strip()
+
+    # Remove stop words
+    stop_words = set(stopwords.words("english"))
+    words = text.split()
+    filtered_words = [word for word in words if word not in stop_words]
+    text = ' '.join(filtered_words).strip()
+
+    # Tokenize
+    tokens = nltk.word_tokenize(text)
+
+    # Lemmatize
+    lemmatizer = WordNetLemmatizer()
+    lem_tokens = [lemmatizer.lemmatize(token) for token in tokens]
+
+    
+    return ' '.join(lem_tokens)
+
+def convert_rating(rating):
+    """
+    Convert rating from string format 'X out of 5 stars' to a float.
+    If rating is invalid or None, returns None.
+    """
+    if pd.isna(rating) or not rating.strip():
+        return None
+    
+    try:
+        # Extract the numeric rating (before "out of 5 stars")
+        rating_value = rating.split(' ')[0]
+        return float(rating_value)
+    except Exception as e:
+        return None
+    
+def fill_missing_ratings(dataframe):
+    """
+    Fills missing or invalid ratings with the most frequent valid rating.
+    """
+    # Apply the convert_rating function to the 'rating' column
+    dataframe['rating'] = dataframe['rating'].apply(convert_rating)
+    
+    # Find the most frequent rating (mode)
+    most_frequent_rating = dataframe['rating'].mode().iloc[0]
+    
+    # Fill NaN or None ratings with the most frequent rating
+    dataframe['rating'] = dataframe['rating'].fillna(most_frequent_rating)
+
+
+# Function to perform word distribution analysis
+def word_distribution(text_data, top_n=50):
+    sentiment_summary = {
+        "features": [],
+        "frequency": []
+    }
+    # Initialize CountVectorizer with max_features to limit to top N tokens
+    vectorizer = CountVectorizer(max_features=top_n)
+    
+    # Fit and transform the text data
+    docs = vectorizer.fit_transform(text_data)
+    
+    # Get feature names and frequencies
+    features = vectorizer.get_feature_names_out()
+    frequency = docs.sum(axis=0).A1  # Summing frequency across documents
+    
+    # Populate sentiment_summary
+    sentiment_summary["features"] = features.tolist()
+    sentiment_summary["frequency"] = frequency.tolist()
+    
+    return sentiment_summary
+
