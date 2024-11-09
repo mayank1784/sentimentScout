@@ -32,6 +32,7 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String(120), unique=True, nullable=False)
     role = db.Column(Enum(Role), default=Role.USER)
     created_at = db.Column(db.DateTime, default=datetime.now(), index=True)
+    updated_at = db.Column(db.DateTime, default = datetime.now())
      # Product relationship: One user can have many products
     products = db.relationship('Product', backref='owner', lazy=True)
     #relationship for ScrapingTasks
@@ -62,6 +63,7 @@ class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text)
+    image = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.now(), index=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
@@ -80,7 +82,18 @@ class ProductPlatform(db.Model):
     
     # Define the relationship to Product with back_populates
     product = db.relationship('Product', back_populates='platforms')
-# Review model
+
+class RawReview(db.Model):
+    __tablename__='raw_reviews'
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.String(36), db.ForeignKey('scraping_tasks.id'), nullable=False)
+    title = db.Column(db.String(200), nullable=True)
+    rating = db.Column(db.String(10), nullable=True)
+    body = db.Column(db.Text, nullable=True)
+    author = db.Column(db.String(100), nullable=True)
+    date = db.Column(db.String(50), nullable=True)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    platform = db.Column(Enum(ReviewSource), nullable=False)  
 class Review(db.Model):
     __tablename__ = 'reviews'
     id = db.Column(db.Integer, primary_key=True)
@@ -104,6 +117,8 @@ class SentimentSummary(db.Model):
     positive_count = db.Column(db.Integer, default=0)
     neutral_count = db.Column(db.Integer, default=0)
     negative_count = db.Column(db.Integer, default=0)
+    average_rating = db.Column(db.Float, default = 0)
+    most_rating = db.Column(db.Float, default = 0)
     word_cloud = db.Column(db.Text)
     words = db.Column(db.JSON, nullable=False, default=list)
     frequency = db.Column(db.JSON, nullable=False, default=list)
@@ -128,16 +143,6 @@ class ScrapingTask(db.Model):
     
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
-class RawReview(db.Model):
-    __tablename__='raw_reviews'
-    id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.String(36), db.ForeignKey('scraping_tasks.id'), nullable=False)
-    title = db.Column(db.String(200), nullable=True)
-    rating = db.Column(db.String(10), nullable=True)
-    body = db.Column(db.Text, nullable=True)
-    author = db.Column(db.String(100), nullable=True)
-    date = db.Column(db.String(50), nullable=True)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-    platform = db.Column(Enum(ReviewSource), nullable=False)  
+
     
     

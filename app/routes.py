@@ -7,6 +7,7 @@ from app.tasks import scrape_flipkart_reviews, scrape_amazon_reviews, preprocess
 import threading
 import uuid
 import re
+from datetime import datetime
 
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -25,6 +26,18 @@ from PIL import Image
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+# Custom unauthorized handler for Flask-Login
+@login_manager.unauthorized_handler
+def unauthorized_callback():
+    """
+    This handler is triggered when an unauthorized user attempts to access a route
+    decorated with `@login_required`. It returns a JSON response with a 401 status code.
+
+    Returns:
+        JSON response with an error message and a 401 status code.
+    """
+    return jsonify({"message": "User not authenticated"}), 401
 
 @app.route('/')
 def get():
@@ -191,6 +204,88 @@ def logout():
     logout_user()
     return jsonify({'message': 'Logout successful'}), 200
 
+# UPDATE EMAIL ROUTE
+@app.route('/update_email', methods=['PUT'])
+@login_required
+@handle_errors
+def update_email():
+    """
+    Updates the user's email address after verifying the current password.
+
+    Request Body (JSON):
+        - `new_email`: The new email address (string).
+        - `password`: The current password for verification (string).
+
+    Returns:
+        Response (JSON):
+            - `message`: Success message if email is updated, or an error message if password is incorrect.
+
+    Error Responses:
+        - 400: If the request body is missing required fields.
+        - 401: If the provided password is incorrect.
+        - 409: If the new email is already taken by another user.
+    """
+    data = request.json
+    new_email = data.get('new_email')
+    password = data.get('password')
+
+    if not new_email or not password:
+        return jsonify({'message': 'New email and password are required'}), 400
+
+    # Verify password
+    if not bcrypt.check_password_hash(current_user.password_hash, password):
+        return jsonify({'message': 'Incorrect password'}), 401
+
+    # Check if new email is already in use
+    if User.query.filter_by(email=new_email).first():
+        return jsonify({'message': 'Email is already in use'}), 409
+
+    # Update email
+    current_user.email = new_email
+    current_user.updated_at = datetime.now()
+    db.session.commit()
+
+    return jsonify({'message': 'Email updated successfully'}), 200
+
+
+# UPDATE PASSWORD ROUTE
+@app.route('/update_password', methods=['PUT'])
+@login_required
+@handle_errors
+def update_password():
+    """
+    Updates the user's password after verifying the current password.
+
+    Request Body (JSON):
+        - `current_password`: The current password for verification (string).
+        - `new_password`: The new password to set (string).
+
+    Returns:
+        Response (JSON):
+            - `message`: Success message if password is updated, or an error message if the current password is incorrect.
+
+    Error Responses:
+        - 400: If the request body is missing required fields.
+        - 401: If the provided current password is incorrect.
+    """
+    data = request.json
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+
+    if not current_password or not new_password:
+        return jsonify({'message': 'Current and new password are required'}), 400
+
+    # Verify current password
+    if not bcrypt.check_password_hash(current_user.password_hash, current_password):
+        return jsonify({'message': 'Incorrect current password'}), 401
+
+    # Update password
+    current_user.password_hash = bcrypt.generate_password_hash(new_password).decode('utf-8')
+    current_user.updated_at = datetime.now()
+    db.session.commit()
+
+    return jsonify({'message': 'Password updated successfully'}), 200
+
 
 # PRODUCT ADDITION/UPDATION ROUTE
 @app.route('/product', methods=['POST'])
@@ -210,6 +305,7 @@ def add_or_update_product():
         "id": <int>,              # Optional: ID of the product to update
         "name": <str>,            # Required: Name of the product
         "description": <str>,     # Required: Description of the product
+        "image: <st>,             # Optional: Image link of the product
         "asin": <str>,            # Optional: Amazon Standard Identification Number
         "fsn": <str>              # Optional: Flipkart Standard Number
     }
@@ -236,6 +332,7 @@ def add_or_update_product():
         # Update product details
         product.name = data.get('name', product.name)
         product.description = data.get('description', product.description)
+        product.image = data.get('image',product.image)
 
         #Check for existing platforms linked to this product using the backref
         existing_asin = any(p.platform == ReviewSource.AMAZON for p in product.platforms)
@@ -267,6 +364,8 @@ def add_or_update_product():
             description=data['description'], 
             created_by=current_user.id  # Associate product with logged-in user
         )
+        if data['image']:
+            product.image = data['image']
 
         # Check for existing products by ASIN or FSN to avoid duplicates
         existing_product_by_asin = ProductPlatform.query.filter_by(platform_id=data.get('asin')).first()
@@ -372,6 +471,7 @@ def get_user_product(product_id):
         "name": <str>,                   # The name of the product
         "description": <str>,            # The description of the product
         "created_at": <str>,             # The creation timestamp of the product
+        "image": <str>,                  # Image of Product
         "platforms": [                   # List of platforms associated with the product
             {
                 "platform": <str>,        # The name of the platform (e.g., Amazon, Flipkart)
@@ -379,6 +479,7 @@ def get_user_product(product_id):
             },
             ...
         ]
+        
     }
     """
     # Fetch the product by ID that belongs to the logged-in user
@@ -393,6 +494,7 @@ def get_user_product(product_id):
         'id': product.id,
         'name': product.name,
         'description': product.description,
+        'image': product.image,
         'created_at': product.created_at.isoformat(),
         'platforms': [
             {
@@ -589,14 +691,14 @@ def scrape_flipkart_reviews_route(fsn):
     product = ProductPlatform.query.filter_by(platform_id=str(fsn).upper()).first()
      # If product is not found, return an error response
     if not product:
-        return jsonify({'error': f'Product with ASIN {fsn} not found. Kindly add product first'}), 404
+        return jsonify({'error': f'Product with FSN {fsn} not found. Kindly add product first'}), 404
     if product.product.created_by != current_user.id:
         return jsonify({'error':"FSN already attached with other user's product"}), 403
     
     existing_task = ScrapingTask.query.filter_by(fsn_asin=str(fsn).upper(), status = Status.PENDING).first()
     if existing_task:
         return jsonify({
-            'error': 'Already scraping for this ASIN',
+            'error': 'Already scraping for this FSN',
             'task': {
                 'task_id': existing_task.id,
                 'fsn_asin': existing_task.fsn_asin,
@@ -872,6 +974,8 @@ def get_user_tasks():
 
 # SENTIMENT ANALYSER API    
 @app.route('/reviews/analyse/<int:product_id>', methods=['POST'])
+@login_required
+@handle_errors
 def classify_multiple_reviews(product_id):
     """
     Classifies the sentiment of reviews for a given product and generates sentiment analysis 
@@ -1036,6 +1140,8 @@ def classify_multiple_reviews(product_id):
             sentiment_summary.words = bar_data['features']
             sentiment_summary.frequency = bar_data['frequency']
             sentiment_summary.platform = platform_enum
+            sentiment_summary.average_rating = data['rating'].mean()
+            sentiment_summary.most_rating = data['rating'].mode()[0]
         else:
             sentiment_summary = SentimentSummary(
                 product_id=product_id,
@@ -1046,7 +1152,9 @@ def classify_multiple_reviews(product_id):
                 word_cloud=img_base64,
                 words=bar_data['features'],
                 frequency=bar_data['frequency'],
-                platform = platform_enum
+                platform = platform_enum,
+                average_rating = data['rating'].mean(),
+                most_rating = data['rating'].mode()[0]
             )
             db.session.add(sentiment_summary)
 
@@ -1101,47 +1209,106 @@ def classify_multiple_reviews(product_id):
 @handle_errors
 def get_sentiment_summary(product_id):
     """
-    Retrieves a sentiment summary for a given product based on reviews from specific platforms (Amazon, Flipkart, or both).
+    Retrieves a sentiment summary for a specific product based on reviews from one or more platforms 
+    (Amazon, Flipkart, or both) and aggregates sentiment metrics such as positive, negative, and neutral 
+    review counts, average ratings, most frequent rating, and word frequencies.
 
-    This route aggregates the sentiment analysis data for reviews of a product from one or more platforms 
-    (Amazon, Flipkart, or 'all') and returns key sentiment metrics such as positive, negative, and neutral 
-    review counts, along with the word frequencies and word clouds for the reviews.
+    This endpoint aggregates sentiment analysis data across platforms, calculates key sentiment metrics, 
+    and returns detailed insights into customer feedback. It also includes word frequencies and word cloud 
+    data, which visualizes the most frequent terms mentioned in reviews for the given product.
 
     Args:
-        product_id (int): The unique identifier of the product for which the sentiment summary is being requested.
+        product_id (int): The unique identifier for the product for which sentiment data is being requested.
 
     Query Parameters:
-        platform (str): The platform to filter reviews by. Can be one of 'amazon', 'flipkart', or 'all'.
-                        - If 'all' is chosen, sentiment summaries from all available platforms are aggregated.
-                        - If 'amazon' or 'flipkart' is chosen, only reviews from that specific platform will be considered.
-                        - Defaults to 'all' if not provided.
+        platform (str, optional): A string that specifies which platform(s) to filter reviews by. 
+            Accepts:
+            - 'amazon': Retrieves sentiment summary data for reviews from Amazon only.
+            - 'flipkart': Retrieves sentiment summary data for reviews from Flipkart only.
+            - 'all': Aggregates sentiment data from all platforms (Amazon, Flipkart, or others).
+            
+            Defaults to 'all' if not provided.
+        
+        Example:
+            GET /sentiment_summary/12345?platform=amazon
+            GET /sentiment_summary/12345?platform=all
 
     Returns:
-        Response (JSON): A JSON object containing the aggregated sentiment data for the product, including:
-            - `positive_reviews`: Total number of positive reviews.
-            - `negative_reviews`: Total number of negative reviews.
-            - `neutral_reviews`: Total number of neutral reviews.
-            - `word_frequencies`: A list of words and their respective frequencies across the selected platform(s).
-            - `word_clouds`: A list of word cloud data for each platform (only included if 'all' is selected).
-            - `word_cloud`: The word cloud data for the specific platform (only included if a single platform is selected).
+        Response (JSON): A JSON object containing the aggregated sentiment data for the requested product.
+        The structure of the response includes:
+            - `product_id`: The unique identifier of the product.
+            - `positive_reviews`: The total number of positive reviews aggregated across the selected platform(s).
+            - `negative_reviews`: The total number of negative reviews aggregated across the selected platform(s).
+            - `neutral_reviews`: The total number of neutral reviews aggregated across the selected platform(s).
+            - `average_rating`: The average rating based on reviews for the product across the selected platform(s).
+            - `most_rating`: The most frequent rating (e.g., 5-star, 4-star) based on the reviews across the selected platform(s).
+            - `word_frequencies`: A list of words and their frequencies found in the reviews, aggregated across all selected platforms.
+            - `word_clouds`: A list of word clouds for each platform (only included if 'all' is selected). Each word cloud represents 
+                the most frequent terms used in reviews for a specific platform.
+            - `word_cloud`: The word cloud data for the selected platform (only included if a single platform is specified).
 
     Error Responses:
-        - 400: Invalid platform parameter. Must be one of 'amazon', 'flipkart', or 'all'.
-        - 404: No sentiment summary found for the specified product and platform.
-        - 500: Internal server error in case of database issues or unexpected errors.
+        - 400: Bad request due to invalid platform parameter. The platform must be one of ['amazon', 'flipkart', 'all'].
+            Example:
+            {
+                "error": "Invalid platform. Choose from ['amazon', 'flipkart', 'all']."
+            }
+        - 404: No sentiment summary data was found for the given product and platform combination.
+            Example:
+            {
+                "error": "No sentiment summary found for the specified product and platform."
+            }
+        - 500: Internal server error, typically in case of database connection issues or unexpected errors.
+            Example:
+            {
+                "error": "An unexpected error occurred: {error_message}"
+            }
 
-    Example:
+    Example 1 (with platform='amazon'):
         GET /sentiment_summary/12345?platform=amazon
-
+        
         Response:
         {
             "product_id": 12345,
             "positive_reviews": 150,
             "negative_reviews": 30,
             "neutral_reviews": 45,
+            "average_rating": 4.2,
+            "most_rating": 5,
             "word_frequencies": [{"word": "good", "frequency": 120}, {"word": "quality", "frequency": 110}],
             "word_cloud": "word_cloud_data_here"
         }
+
+    Example 2 (with platform='all'):
+        GET /sentiment_summary/12345?platform=all
+        
+        Response:
+        {
+            "product_id": 12345,
+            "positive_reviews": 300,
+            "negative_reviews": 60,
+            "neutral_reviews": 90,
+            "average_rating": 4.1,
+            "most_rating": 5,
+            "word_frequencies": [{"word": "good", "frequency": 240}, {"word": "quality", "frequency": 220}],
+            "word_clouds": [
+                {
+                    "platform": "amazon",
+                    "word_cloud": "amazon_word_cloud_data_here"
+                },
+                {
+                    "platform": "flipkart",
+                    "word_cloud": "flipkart_word_cloud_data_here"
+                }
+            ]
+        }
+
+    Notes:
+        - The `average_rating` is the mean of all ratings across the reviews. If the platform is 'all', 
+          the average rating is calculated across all available platforms for the product.
+        - The `most_rating` is the most frequent rating value across reviews (e.g., 5-star, 4-star) for the selected platform(s).
+        - If `platform` is 'all', both `word_clouds` for Amazon and Flipkart (or other platforms) will be included. If only one platform is chosen, the corresponding `word_cloud` will be included for that platform.
+        - Word frequencies are aggregated across reviews for the selected platform(s), and the most frequent words are listed with their corresponding frequency count.
     """
     # Get the platform argument from query parameters
     platform = request.args.get('platform', 'all').lower()
@@ -1168,9 +1335,13 @@ def get_sentiment_summary(product_id):
             "negative_reviews": 0,
             "neutral_reviews": 0,
             "word_clouds": [],  # List of word cloud objects for each platform
-            "word_frequencies": {}
+            "word_frequencies": {},
+            "average_rating": 0,
+            "most_rating": None
         }
 
+
+        rating_counts = {}
         # Aggregate data from all platform summaries
         for summary in summaries:
             # Aggregate review counts
@@ -1193,12 +1364,27 @@ def get_sentiment_summary(product_id):
                 }
                 aggregated_summary["word_clouds"].append(platform_word_cloud)
 
+            # Retrieve ratings from summary
+            aggregated_summary["average_rating"] += summary.average_rating
+            # Count most ratings occurrences
+            rating_counts[summary.most_rating] = rating_counts.get(summary.most_rating, 0) + 1
+            
+        # Calculate average of average ratings if 'all' is chosen
+        if platform == 'all' and summaries:
+            aggregated_summary["average_rating"] /= len(summaries)
+            
+        # Determine the most common rating if 'all' is chosen
+        if rating_counts:
+            aggregated_summary["most_rating"] = max(rating_counts, key=rating_counts.get)
+
         # Prepare the response data
         response_data = {
             "product_id": product_id,
             "positive_reviews": aggregated_summary["positive_reviews"],
             "negative_reviews": aggregated_summary["negative_reviews"],
             "neutral_reviews": aggregated_summary["neutral_reviews"],
+            "average_rating": aggregated_summary["average_rating"],
+            "most_rating": aggregated_summary["most_rating"],
             "word_frequencies": [{"word": word, "frequency": freq} for word, freq in aggregated_summary["word_frequencies"].items()]
         }
 
@@ -1222,4 +1408,115 @@ def get_sentiment_summary(product_id):
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 
+@app.route('/dashboard', methods=['GET'])
+@login_required
+@handle_errors
+def get_dashboard_data():
+    """
+    Retrieves dashboard data for the current logged-in user. This includes aggregated data from sentiment analysis 
+    and scraping tasks, along with key statistics on products, reviews, and sentiment analysis results.
+
+    Returns:
+        Response (JSON): A JSON object containing key statistics such as:
+            - `total_reviews`: Total number of reviews analyzed.
+            - `total_products`: Total number of products.
+            - `pending_scraping_tasks`: Number of scraping tasks that are pending.
+            - `pending_scraping_task_details`: Details of the pending scraping tasks.
+            - `total_positive_reviews`: Total number of positive reviews.
+            - `total_negative_reviews`: Total number of negative reviews.
+            - `total_neutral_reviews`: Total number of neutral reviews.
+            - `average_rating`: The average overall rating across all reviews.
+            - `most_rating`: The most frequent rating value.
+            - `product_with_most_positive_reviews`: Product with the highest count of positive reviews.
+            - `product_with_most_negative_reviews`: Product with the highest count of negative reviews.
+            - `product_with_most_neutral_reviews`: Product with the highest count of neutral reviews.
+
+    Error Responses:
+        - 500: Internal server error in case of unexpected errors.
+    """
+    try:
+        # Get total reviews analyzed (counting reviews for products created by the current user)
+        total_reviews = db.session.query(Review).join(Product).filter(Product.created_by == current_user.id).count()
+
+        # Get total products for the current user
+        total_products = db.session.query(Product).filter_by(created_by=current_user.id).count()
+
+        # Get pending scraping tasks (from ScrapingTasks table)
+        pending_scraping_tasks = db.session.query(ScrapingTask).filter_by(status=Status.PENDING, created_by=current_user.id).count()
+
+        # Get details of pending scraping tasks
+        pending_scraping_task_details = db.session.query(ScrapingTask).filter_by(status=Status.PENDING, created_by=current_user.id).all()
+
+        # Get product_ids created by the current user
+        user_product_ids = db.session.query(Product.id).filter_by(created_by=current_user.id).all()
+        user_product_ids = [prod[0] for prod in user_product_ids]  # Extract product ids from the query result
+
+        # Aggregate sentiment summary counts (from SentimentSummary table)
+        total_positive_reviews = db.session.query(db.func.sum(SentimentSummary.positive_count)) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)).scalar() or 0
+
+        total_negative_reviews = db.session.query(db.func.sum(SentimentSummary.negative_count)) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)).scalar() or 0
+
+        total_neutral_reviews = db.session.query(db.func.sum(SentimentSummary.neutral_count)) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)).scalar() or 0
+
+        # Get average rating across all products for the current user
+        average_rating = db.session.query(db.func.avg(SentimentSummary.average_rating)) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)).scalar() or 0
+        # Get the most common rating (most rating)
+        most_rating = db.session.query(SentimentSummary.most_rating) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)) \
+            .group_by(SentimentSummary.most_rating) \
+            .order_by(db.func.count().desc()).first()
+            
+        # Product with most positive reviews
+        product_with_most_positive_reviews = db.session.query(SentimentSummary.product_id, db.func.sum(SentimentSummary.positive_count).label('total_positive')) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)) \
+            .group_by(SentimentSummary.product_id) \
+            .order_by(db.func.sum(SentimentSummary.positive_count).desc()).first()
+
+        # Product with most negative reviews
+        product_with_most_negative_reviews = db.session.query(SentimentSummary.product_id, db.func.sum(SentimentSummary.negative_count).label('total_negative')) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)) \
+            .group_by(SentimentSummary.product_id) \
+            .order_by(db.func.sum(SentimentSummary.negative_count).desc()).first()
+
+        # Product with most neutral reviews
+        product_with_most_neutral_reviews = db.session.query(SentimentSummary.product_id, db.func.sum(SentimentSummary.neutral_count).label('total_neutral')) \
+            .filter(SentimentSummary.product_id.in_(user_product_ids)) \
+            .group_by(SentimentSummary.product_id) \
+            .order_by(db.func.sum(SentimentSummary.neutral_count).desc()).first()
+
+
+        # Prepare response data
+        response_data = {
+            "total_reviews": total_reviews,
+            "total_products": total_products,
+            "pending_scraping_tasks": pending_scraping_tasks,
+            "pending_scraping_task_details": [
+                {
+                    "task_id": task.id,
+                    "status": task.status.name,
+                    "created_at": task.created_at,
+                    "message": task.message,
+                    "platform": task.platform.name,
+                    "product_id": task.product_id
+                } for task in pending_scraping_task_details
+            ],
+            "total_positive_reviews": total_positive_reviews,
+            "total_negative_reviews": total_negative_reviews,
+            "total_neutral_reviews": total_neutral_reviews,
+            "average_rating": average_rating,
+            "most_rating": most_rating[0] if most_rating else None,
+            "product_with_most_positive_reviews": product_with_most_positive_reviews[0] if product_with_most_positive_reviews else None,
+            "product_with_most_negative_reviews": product_with_most_negative_reviews[0] if product_with_most_negative_reviews else None,
+            "product_with_most_neutral_reviews": product_with_most_neutral_reviews[0] if product_with_most_neutral_reviews else None
+        }
+
+        # Return the dashboard data
+        return jsonify(response_data), 200
+
+    except Exception as e:
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
