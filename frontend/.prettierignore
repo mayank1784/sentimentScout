@@ -1,5 +1,0 @@
-# Ignore built files and dependencies
-node_modules/
-.next/
-build/
-public/

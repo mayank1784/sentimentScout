@@ -1518,5 +1518,6 @@ def get_dashboard_data():
         return jsonify(response_data), 200
 
     except Exception as e:
+        print(e)
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
