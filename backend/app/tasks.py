@@ -1,5 +1,6 @@
 # tasks.py
 from selenium import webdriver
+import os
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
@@ -18,9 +19,11 @@ import pandas as pd
 import pickle
 import re
 import nltk
-nltk.download('stopwords')
-nltk.download('punkt')
-nltk.download('wordnet')
+
+if os.environ.get('FLASK_ENV') != 'production':
+    nltk.download('stopwords')
+    nltk.download('punkt')
+    nltk.download('wordnet')
 from nltk.corpus import stopwords
 from nltk import word_tokenize
 from nltk.stem import WordNetLemmatizer

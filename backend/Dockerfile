@@ -7,8 +7,18 @@ WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . /app
 
-# Install any needed packages specified in requirements.txt
+# Install any needed system dependencies (e.g., Chromium and its driver)
+RUN apt-get update && apt-get install -y \
+    chromium-driver \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements-prod.txt
+
+# Download NLTK data during the build phase
+RUN python -m nltk.downloader stopwords punkt wordnet \
+    && mkdir -p /root/nltk_data
 
 # Expose the Flask app on port 5000
 EXPOSE 5000
@@ -21,4 +31,4 @@ ENV FLASK_ENV=production
 RUN pip install gunicorn
 
 # Run the application
-CMD ["sh", "-c", "gunicorn --workers 3 --bind 0.0.0.0:$PORT app:app"]
+CMD ["sh", "-c", "gunicorn --workers 3 --threads 4 --bind 0.0.0.0:$PORT app:app"]
