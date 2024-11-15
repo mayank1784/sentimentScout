@@ -24,3 +24,5 @@ env/
 
 # Local settings
 instance/config.py
+
+*.DS_Store
