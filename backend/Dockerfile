@@ -17,5 +17,9 @@ EXPOSE 5000
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 
+# Install Gunicorn
+RUN pip install gunicorn
+
 # Run the application
-CMD ["flask", "run", "--host=0.0.0.0"]
+CMD ["gunicorn", "--workers", "3", "--bind", "0.0.0.0:$PORT", "app:app"]
+
