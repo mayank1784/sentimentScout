@@ -8,7 +8,7 @@ WORKDIR /app
 COPY . /app
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-prod.txt
 
 # Expose the Flask app on port 5000
 EXPOSE 5000
@@ -21,5 +21,4 @@ ENV FLASK_ENV=production
 RUN pip install gunicorn
 
 # Run the application
-CMD ["gunicorn", "--workers", "3", "--bind", "0.0.0.0:$PORT", "app:app"]
-
+CMD ["sh", "-c", "gunicorn --workers 3 --bind 0.0.0.0:$PORT app:app"]
