@@ -28,7 +28,7 @@ export function DashboardStats({ data }: DashboardStatsProps) {
     },
     {
       title: "Most Rating",
-      value: data.most_rating.toFixed(1),
+      value: data?.most_rating != null ? data.most_rating.toFixed(1) : 0.0,
       icon: Star,
       color: "text-yellow-800"
     },

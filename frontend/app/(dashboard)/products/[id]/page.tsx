@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Product } from "@/lib/types";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { ProductAnalytics } from "@/components/products/product-analytics";

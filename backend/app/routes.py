@@ -1508,7 +1508,7 @@ def get_dashboard_data():
             "total_negative_reviews": total_negative_reviews,
             "total_neutral_reviews": total_neutral_reviews,
             "average_rating": average_rating,
-            "most_rating": most_rating[0] if most_rating else None,
+            "most_rating": most_rating[0] if most_rating else 0,
             "product_with_most_positive_reviews": product_with_most_positive_reviews[0] if product_with_most_positive_reviews else None,
             "product_with_most_negative_reviews": product_with_most_negative_reviews[0] if product_with_most_negative_reviews else None,
             "product_with_most_neutral_reviews": product_with_most_neutral_reviews[0] if product_with_most_neutral_reviews else None

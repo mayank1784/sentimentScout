@@ -11,8 +11,6 @@ CORS(app)
 
 
 app.config.from_object('config.Config')
-
-
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 # Flask-Login setup for API backend only
