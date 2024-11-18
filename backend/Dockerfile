@@ -47,4 +47,4 @@ ENV FLASK_ENV=production
 RUN pip install gunicorn
 
 # Run the application
-CMD ["sh", "-c", "gunicorn --workers 3 --threads 4 --bind 0.0.0.0:$PORT"]
+CMD ["sh", "-c", "gunicorn --workers 3 --threads 4 --bind 0.0.0.0:$PORT app:app"]
